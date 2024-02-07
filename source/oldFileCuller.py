@@ -121,6 +121,10 @@ print("# of files older than cutoff: {n}".format(n=len(filesToDelete)))
 
 hugeFileCount = 200
 
+deletionCount = 0
+failCount = 0
+failList = []
+
 if len(filesToDelete) > 0:
     dirStruct = buildDirectoryStructure(filesToDelete, fileKey=lambda f:f[0], outputFunc=lambda obj:('{a} days'.format(a=obj[1].days)), fileCountOnly=len(filesToDelete) > hugeFileCount)
 
@@ -138,8 +142,22 @@ if len(filesToDelete) > 0:
             if dryRun:
                 print('Would have deleted ', file.name)
             else:
-                print('Deleting ', file.name)
-                file.unlink()
+                print('Deleting ', str(file))
+                try:
+                    file.unlink()
+                    deletionCount += 1
+                except:
+                    failList.append(file)
+                    failCount += 1
+        print()
+        print('Deletion complete:')
+        print('\t{n} files deleted'.format(n=deletionCount))
+        if failCount > 0:
+            print('\t{n} files failed to delete'.format(n=failCount))
+            print()
+            print('Failed to delete:')
+        for file in failList:
+            print('\t\t', file)
     else:
         print('Deletion cancelled.')
 else:
