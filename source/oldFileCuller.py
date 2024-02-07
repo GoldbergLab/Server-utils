@@ -15,7 +15,8 @@ import yaml, json
 #   results may be further filtered by requiring the keep and delete files to be
 #   in the same folder for them to match.
 
-def buildDirectoryStructure(fileList, structure={}, fileKey=lambda f:f, outputFunc=lambda obj:obj):
+def buildDirectoryStructure(fileList, structure={}, fileKey=lambda f:f, outputFunc=lambda obj:obj, includeFiles=True, fileCountOnly=False):
+    fileCountKey = '*** files'
     for obj in fileList:
         file = fileKey(obj).resolve()
         thisStruct = structure
@@ -24,7 +25,17 @@ def buildDirectoryStructure(fileList, structure={}, fileKey=lambda f:f, outputFu
             if not parent.name in thisStruct:
                 thisStruct[parent.name] = {}
             thisStruct = thisStruct[parent.name]
-        thisStruct[file.name] = outputFunc(obj)
+        if includeFiles:
+            # Include files in directory structure
+            if fileCountOnly:
+                # Only include file counts, rather than all files
+                if fileCountKey in thisStruct:
+                    thisStruct[fileCountKey] = thisStruct[fileCountKey] + 1
+                else:
+                    thisStruct[fileCountKey] = 1
+            else:
+                # Include all files
+                thisStruct[file.name] = outputFunc(obj)
     return structure
 
 def abbreviatePath(path, width):
@@ -55,20 +66,8 @@ def printResultSummary(root, nResults, keepList, unmatchedDeleteFiles, multipleK
     print()
 
 parser = argparse.ArgumentParser(description='Search recursively through   \
-the given root directory for files, and delete one file in pairs matched   \
-according to provided regular expressions. Found files are filtered into \
-two lists by two regex patterns: keepFilterPattern, and deleteFilterpattern. \
-Files in the delete list are then paired up to files in the keep list by a \
-keep match regex and a delete match regex. The match (or 1st capturing group, \
-if it exists) for the keep match regex must be identical to the match (or 1st \
-group) for the delete match regex in order for two files to be considered a \
-pair. The results may be further filtered by requiring the keep and delete \
-files to be in the same folder for them to match. The user then has the option \
-to delete the paired files from the delete list.\n \
-For example: \
-python deduplicator.py -k .*\.avi -d .*\.cine -K (.*?)(_C[0-9]+L?)?\.avi -D (.*)\.cine "C:\path\\to\\root\\folder"\n \
-would search for files with the avi extension to keep, and files with the cine extension to delete. The files would be matched \
-if the filenames match without extensions, and the avi file may have a suffix of the form _C123L that the cine file does not include.',
+the given root directory for files, and offer to delete files older than the \
+given age cutoff.',
 epilog='Created by Brian Kardon, bmk27@cornell.edu')
 parser.add_argument('root', metavar='root', type=str,
                     help='the root directory in which to search for files')
@@ -85,23 +84,6 @@ print()
 root = Path(args.root) # Path(r'Z:\video\Head-Fix Lick Experiments\ALM\Video\ALM_4\200510_lickLong_Day2_ALM_phase2_median')
 dryRun = args.dryRun # True
 cutoffAge = dt.timedelta(days=args.cutoffAge)
-
-# # Require that the corresponding keep/delete files be in the same folder?
-#
-# # Pattern to use to filter filenames for keeping
-# keepFilterPatternString = args.keepFilterPattern # '.*\.avi'
-# # Pattern to use to filter filenames for deleting
-# deleteFilterPatternString = args.deleteFilterPattern # '.*\.cine'
-# # Pattern to use to match keep files to delete files. If there is no group, the whole match is used. If there is one or more gruops, the first group is used to match.
-# keepMatchPatternString = args.keepMatchPattern # '(.*?)(?:_C[0-9]+L?)?\.avi'
-# # Pattern to use to match delete files to keep files. If there is no group, the whole match is used. If there is one or more gruops, the first group is used to match.
-# deleteMatchPatternString = args.deleteMatchPattern # '(.*)\.cine'
-
-
-# keepFilterPattern = re.compile(keepFilterPatternString)
-# deleteFilterPattern = re.compile(deleteFilterPatternString)
-# keepMatchPattern = re.compile(keepMatchPatternString)
-# deleteMatchPattern = re.compile(deleteMatchPatternString)
 
 print("Searching for files...")
 print()
@@ -138,7 +120,7 @@ print()
 print("# of files older than cutoff: {n}".format(n=len(filesToDelete)))
 
 if len(filesToDelete) > 0:
-    dirStruct = buildDirectoryStructure(filesToDelete, fileKey=lambda f:f[0], outputFunc=lambda obj:('{a} days'.format(a=obj[1].days)))
+    dirStruct = buildDirectoryStructure(filesToDelete, fileKey=lambda f:f[0], outputFunc=lambda obj:('{a} days'.format(a=obj[1].days)), fileCountOnly=len(filesToDelete) > 2)
 
     print('******** FILES TO DELETE **********')
     print(yaml.dump(dirStruct, default_flow_style=False))
