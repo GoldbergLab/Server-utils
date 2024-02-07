@@ -119,16 +119,19 @@ print("\tMean file age: {a} +/- {s}".format(a=meanAge, s=stdAge))
 print()
 print("# of files older than cutoff: {n}".format(n=len(filesToDelete)))
 
+hugeFileCount = 200
+
 if len(filesToDelete) > 0:
-    dirStruct = buildDirectoryStructure(filesToDelete, fileKey=lambda f:f[0], outputFunc=lambda obj:('{a} days'.format(a=obj[1].days)), fileCountOnly=len(filesToDelete) > 2)
+    dirStruct = buildDirectoryStructure(filesToDelete, fileKey=lambda f:f[0], outputFunc=lambda obj:('{a} days'.format(a=obj[1].days)), fileCountOnly=len(filesToDelete) > hugeFileCount)
 
     print('******** FILES TO DELETE **********')
     print(yaml.dump(dirStruct, default_flow_style=False))
     print()
-    for file in filesToDelete:
-        print(file[0])
-    # print(json.dumps(dirStruct, sort_keys=True, indent=4))
-    print()
+    if len(filesToDelete) < hugeFileCount:
+        for file in filesToDelete:
+            print(file[0])
+        # print(json.dumps(dirStruct, sort_keys=True, indent=4))
+        print()
     yn = input('Delete files? ')
     if yn == 'y':
         for file, age in filesToDelete:
