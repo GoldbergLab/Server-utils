@@ -2,79 +2,14 @@ from pathlib import Path
 import re
 import argparse
 import datetime as dt
-import numpy as np
 from pprint import pprint
 import yaml, json
 
-# Search recursively through the given root directory for files, filtered into
-#   two lists by two regex patterns: files to keep, and files to delete. Files
-#   to delete are then matched up to files to delete by a keep match regex and
-#   a delete match regex. The match (or 1st capturing group, if it exists) for
-#   the keep match regex must be identical to the match (or 1st group) for the
-#   delete match regex in order for two files to be considered a pair. The
-#   results may be further filtered by requiring the keep and delete files to be
-#   in the same folder for them to match.
-
-def buildDirectoryStructure(fileList, structure={}, fileKey=lambda f:f, outputFunc=lambda obj:obj, includeFiles=True, fileCountOnly=False):
-    fileCountKey = '*** files'
-    for obj in fileList:
-        file = fileKey(obj).resolve()
-        thisStruct = structure
-        parents = list(file.parents)
-        for lvl, parent in enumerate(parents[-2::-1]):
-            if not parent.name in thisStruct:
-                thisStruct[parent.name] = {}
-            thisStruct = thisStruct[parent.name]
-        if includeFiles:
-            # Include files in directory structure
-            if fileCountOnly:
-                # Only include file counts, rather than all files
-                if fileCountKey in thisStruct:
-                    thisStruct[fileCountKey] = thisStruct[fileCountKey] + 1
-                else:
-                    thisStruct[fileCountKey] = 1
-            else:
-                # Include all files
-                thisStruct[file.name] = outputFunc(obj)
-    return structure
-
-def abbreviatePath(path, width):
-    if len(path) > width:
-        ellipsis = '...'
-        startLength = 3
-        return path[:startLength] + ellipsis + path[(startLength+(len(path)-width+len(ellipsis))):]
-    else:
-        return path
-
-def printResultSummary(root, nResults, keepList, unmatchedDeleteFiles, multipleKeepMatches, otherList, folderList, keepFilterPatternString, deleteFilterPatternString, keepMatchPatternString, deleteMatchPatternString, requireSameFolder):
-    print()
-    print("Searched root folder {r}".format(r=root.absolute()))
-    print("\tKeepable filter pattern:         {kfp}".format(kfp=keepFilterPatternString))
-    print("\tDeletable filter pattern:        {dfp}".format(dfp=deleteFilterPatternString))
-    print("\tKeepable matching pattern:       {kmp}".format(kmp=keepMatchPatternString))
-    print("\tDeletable matching pattern:      {dmp}".format(dmp=deleteMatchPatternString))
-    print("\tOnly match within same folder?   {rsf}".format(rsf=requireSameFolder))
-    print()
-    print("RESULTS:")
-    print("\t{d} deletable files identified (will be deleted)".format(d=nResults))
-    print()
-    print("\t{u} deletable files without a keep match (will NOT be deleted)".format(u=len(unmatchedDeleteFiles)))
-    print("\t{k} keepable files identified".format(k=len(keepList)))
-    print("\t{m} deletable files with multiple keep matches identified".format(m=len(multipleKeepMatches)))
-    print("\t{o} unrelated files found {exts}".format(o=len(otherList), exts=set([f.suffix for f in otherList])))
-    print("\t{f} folders found".format(f=len(folderList)))
-    print()
-
 parser = argparse.ArgumentParser(description='Search recursively through   \
-the given root directory for files, and offer to delete files older than the \
-given age cutoff.',
+the given root directory for files, and offer to delete empty directories',
 epilog='Created by Brian Kardon, bmk27@cornell.edu')
 parser.add_argument('root', metavar='root', type=str,
                     help='the root directory in which to search for files')
-parser.add_argument('-c', '--cutoffAge', dest="cutoffAge", type=float, required=True, help='Cutoff age in days such that files older than this will be deleted')
-# parser.add_argument('-d', '--deleteFilterPattern', dest="deleteFilterPattern", type=str, required=True, help='Regex pattern to filter files into the delete list')
-# parser.add_argument('-K', '--keepMatchPattern', dest="keepMatchPattern", type=str, required=True, help='Regex pattern to extract matching segment from keep files to pair with delete files')
-# parser.add_argument('-D', '--deleteMatchPattern', dest="deleteMatchPattern", type=str, required=True, help='Regex pattern to extract matching segment from delete files to pair with keep files')
 parser.add_argument('-n', '--dryRun', dest="dryRun", action='store_true', help='If this flag is present, merely list the files that would be deleted, but do not delete them')
 # parser.add_argument('-w', '--maxWidth', dest="maxWidth", type=int, default=160, help='Maximum number of characters to display full file paths to delete')
 args = parser.parse_args()
@@ -83,25 +18,22 @@ print()
 
 root = Path(args.root) # Path(r'Z:\video\Head-Fix Lick Experiments\ALM\Video\ALM_4\200510_lickLong_Day2_ALM_phase2_median')
 dryRun = args.dryRun # True
-cutoffAge = dt.timedelta(days=args.cutoffAge)
 
-print("Searching for files...")
+print("Searching for empty folders...")
 print()
 
 now = dt.datetime.now()
 
-fileList = []
-folderList = []
+emptyFolderList = []
+nonEmptyFolderList = []
 k = 0
 notifyInterval = 1000
 for i in root.glob('**/*'):
-    k = k + 1
-    if k % notifyInterval == 0:
-        print("...{k} files found...".format(k=k))
     if i.is_dir():
+        k = k + 1
+        if k % notifyInterval == 0:
+            print("...{k} folders found...".format(k=k))
         folderList.append(i.resolve())
-    else:
-        fileList.append((i.resolve(), now - dt.datetime.fromtimestamp(i.stat().st_mtime)))
 
 ages = np.array([r[1] for r in fileList])
 
