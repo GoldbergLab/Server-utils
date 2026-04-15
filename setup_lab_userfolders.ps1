@@ -66,15 +66,30 @@ if (-not (Test-Path $Root)) {
     throw "Root path does not exist: $Root"
 }
 
+Write-Host "=== Ensuring lab group '$LabGroup' exists ===" -ForegroundColor Cyan
+if (-not (Get-LocalGroup -Name $LabGroup -ErrorAction SilentlyContinue)) {
+    New-LocalGroup -Name $LabGroup `
+                   -Description "Lab members with create-only access to shared drive" `
+                   -ErrorAction Stop | Out-Null
+    Write-Host "  Created local group: $LabGroup" -ForegroundColor Green
+    Write-Warning "  The group is empty. Add members with:"
+    Write-Warning "    Add-LocalGroupMember -Group $LabGroup -Member <username>"
+    Write-Warning "  Until it has members, nobody (besides admins / folder owners / reader) can access the drive."
+} else {
+    Write-Host "  Lab group already exists."
+}
+
+Write-Host ""
 Write-Host "=== Ensuring reader account '$ReaderUser' exists ===" -ForegroundColor Cyan
 if (-not (Get-LocalUser -Name $ReaderUser -ErrorAction SilentlyContinue)) {
     $pw = Read-Host -AsSecureString "Set a password for the new '$ReaderUser' account"
     New-LocalUser -Name $ReaderUser `
                   -Password $pw `
                   -FullName "$ReaderUser (read-only service account)" `
-                  -Description "Read-only base credential for CIFS multiuser mounts" `
+                  -Description "Read-only credential for CIFS mounts" `
                   -PasswordNeverExpires `
-                  -UserMayNotChangePassword | Out-Null
+                  -UserMayNotChangePassword `
+                  -ErrorAction Stop | Out-Null
     Write-Host "  Created local user: $ReaderUser" -ForegroundColor Green
 } else {
     Write-Host "  Reader account already exists."
@@ -124,6 +139,25 @@ Write-Host ""
 Write-Host "=== Creating user folders ===" -ForegroundColor Cyan
 
 foreach ($user in $Users) {
+    # Ensure local account exists
+    if (-not (Get-LocalUser -Name $user -ErrorAction SilentlyContinue)) {
+        Write-Host "  Local account '$user' does not exist." -ForegroundColor Yellow
+        $pw = Read-Host -AsSecureString "  Set an initial password for new user '$user'"
+        try {
+            New-LocalUser -Name $user `
+                          -Password $pw `
+                          -FullName $user `
+                          -Description "Lab member account" `
+                          -PasswordNeverExpires `
+                          -ErrorAction Stop | Out-Null
+            Write-Host "  Created local user: $user" -ForegroundColor Green
+        } catch {
+            Write-Warning "  Failed to create user '$user': $_"
+            Write-Warning "  Skipping folder setup for this user."
+            continue
+        }
+    }
+
     $userPath = Join-Path $Root $user
     if (-not (Test-Path $userPath)) {
         New-Item -ItemType Directory -Path $userPath | Out-Null
@@ -147,6 +181,20 @@ foreach ($user in $Users) {
     } catch {
         Write-Warning "  Could not grant permissions to '$account': $_"
         Write-Warning "  (Does the account exist on this server?)"
+    }
+
+    # Ensure the user is a member of the lab group
+    $alreadyMember = Get-LocalGroupMember -Group $LabGroup -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Name -eq $account }
+    if (-not $alreadyMember) {
+        try {
+            Add-LocalGroupMember -Group $LabGroup -Member $user -ErrorAction Stop
+            Write-Host "           Added $user to $LabGroup"
+        } catch {
+            Write-Warning "  Could not add '$user' to group '$LabGroup': $_"
+        }
+    } else {
+        Write-Host "           $user is already in $LabGroup"
     }
 }
 
