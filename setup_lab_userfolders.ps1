@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Sets up z5 drive with per-user folders and the lab's permission model.
 
@@ -69,7 +69,7 @@ if (-not (Test-Path $Root)) {
 Write-Host "=== Ensuring lab group '$LabGroup' exists ===" -ForegroundColor Cyan
 if (-not (Get-LocalGroup -Name $LabGroup -ErrorAction SilentlyContinue)) {
     New-LocalGroup -Name $LabGroup `
-                   -Description "Lab members w/ create-only access" `
+                   -Description "Lab members with create-only access to shared drive" `
                    -ErrorAction Stop | Out-Null
     Write-Host "  Created local group: $LabGroup" -ForegroundColor Green
     Write-Warning "  The group is empty. Add members with:"
@@ -166,10 +166,18 @@ foreach ($user in $Users) {
         Write-Host "  Exists:  $userPath"
     }
 
-    # Grant explicit Modify to the user on their own folder (inherits to children).
-    # Inheritance from root stays enabled, so Admin/LabMembers/CreatorOwner
-    # ACEs still apply from the root.
+    # Normalize the user folder ACL:
+    #   1. Re-enable inheritance from root (clears "protected" flag)
+    #   2. Remove any leftover explicit ACEs (legacy Users, etc.)
+    #   3. Add a single explicit Modify for the owning user
+    # After this, the folder inherits Admins/SYSTEM/LabMembers/reader from root,
+    # plus the explicit Modify for the owner.
     $userAcl = Get-Acl $userPath
+    $userAcl.SetAccessRuleProtection($false, $false)  # enable inheritance, don't preserve current
+    # Remove any explicit (non-inherited) access rules
+    $userAcl.Access | Where-Object { -not $_.IsInherited } | ForEach-Object {
+        [void]$userAcl.RemoveAccessRule($_)
+    }
     $account = "$Domain\$user"
     try {
         $userRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
@@ -177,7 +185,7 @@ foreach ($user in $Users) {
         )
         $userAcl.AddAccessRule($userRule)
         Set-Acl -Path $userPath -AclObject $userAcl
-        Write-Host "           Granted Modify to $account"
+        Write-Host "           Normalized ACL; granted Modify to $account"
     } catch {
         Write-Warning "  Could not grant permissions to '$account': $_"
         Write-Warning "  (Does the account exist on this server?)"
