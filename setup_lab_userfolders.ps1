@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Sets up z5 drive with per-user folders and the lab's permission model.
 
@@ -69,7 +69,7 @@ if (-not (Test-Path $Root)) {
 Write-Host "=== Ensuring lab group '$LabGroup' exists ===" -ForegroundColor Cyan
 if (-not (Get-LocalGroup -Name $LabGroup -ErrorAction SilentlyContinue)) {
     New-LocalGroup -Name $LabGroup `
-                   -Description "Lab members with create-only access to shared drive" `
+                   -Description "Lab members w/ create-only access" `
                    -ErrorAction Stop | Out-Null
     Write-Host "  Created local group: $LabGroup" -ForegroundColor Green
     Write-Warning "  The group is empty. Add members with:"
