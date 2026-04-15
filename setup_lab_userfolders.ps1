@@ -8,6 +8,8 @@
       - LabMembers group: can read/traverse anywhere + create new files/folders
         anywhere, but cannot modify or delete ANY existing files/folders
         (not even ones they themselves created — strict isolation)
+      - Reader account: read/traverse only, anywhere (intended for use as a
+        base credential for CIFS `multiuser` mounts)
       - Each named user: explicit Modify permission on their own user folder,
         so they have full read/write/delete within it
 
@@ -28,6 +30,11 @@
     Name of the group whose members can create-but-not-modify across z5.
     Defaults to "LabMembers". This group must exist (create it first with
     `net localgroup LabMembers /add` and add users to it).
+
+.PARAMETER ReaderUser
+    Name of a read-only local account used as a base credential for CIFS
+    `multiuser` mounts. The script will create the account if it does not
+    already exist (you'll be prompted for a password). Defaults to "reader".
 
 .PARAMETER Domain
     Account domain. Defaults to the local computer name (for local accounts).
@@ -50,6 +57,8 @@ param(
 
     [string]$LabGroup = "LabMembers",
 
+    [string]$ReaderUser = "reader",
+
     [string]$Domain = $env:COMPUTERNAME
 )
 
@@ -57,6 +66,21 @@ if (-not (Test-Path $Root)) {
     throw "Root path does not exist: $Root"
 }
 
+Write-Host "=== Ensuring reader account '$ReaderUser' exists ===" -ForegroundColor Cyan
+if (-not (Get-LocalUser -Name $ReaderUser -ErrorAction SilentlyContinue)) {
+    $pw = Read-Host -AsSecureString "Set a password for the new '$ReaderUser' account"
+    New-LocalUser -Name $ReaderUser `
+                  -Password $pw `
+                  -FullName "$ReaderUser (read-only service account)" `
+                  -Description "Read-only base credential for CIFS multiuser mounts" `
+                  -PasswordNeverExpires `
+                  -UserMayNotChangePassword | Out-Null
+    Write-Host "  Created local user: $ReaderUser" -ForegroundColor Green
+} else {
+    Write-Host "  Reader account already exists."
+}
+
+Write-Host ""
 Write-Host "=== Configuring root ACL on $Root ===" -ForegroundColor Cyan
 
 # Build root ACL from scratch (idempotent)
@@ -85,6 +109,12 @@ $rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAcces
 $labRights = [System.Security.AccessControl.FileSystemRights]"ReadAndExecute,CreateFiles,CreateDirectories"
 $rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
     $LabGroup, $labRights, $inheritBoth, $noProp, "Allow"
+)))
+
+# Reader account: ReadAndExecute only, inherits everywhere.
+# Intended for use as a base credential by CIFS `multiuser` mounts on clients.
+$rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+    "$Domain\$ReaderUser", "ReadAndExecute", $inheritBoth, $noProp, "Allow"
 )))
 
 Set-Acl -Path $Root -AclObject $rootAcl
