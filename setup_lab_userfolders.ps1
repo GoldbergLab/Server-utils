@@ -66,6 +66,21 @@ if (-not (Test-Path $Root)) {
     throw "Root path does not exist: $Root"
 }
 
+$overallSw = [System.Diagnostics.Stopwatch]::StartNew()
+
+# Track high-level progress so the finally block can summarize what was
+# accomplished if the script exits early (crash, Ctrl+C, ACL error, etc.)
+$status = @{
+    LabGroupOk     = $false
+    ReaderOk       = $false
+    RootAclOk      = $false
+    CompletedUsers = @()
+    CurrentUser    = $null
+}
+$completed = $false
+
+try {
+
 Write-Host "=== Ensuring lab group '$LabGroup' exists ===" -ForegroundColor Cyan
 if (-not (Get-LocalGroup -Name $LabGroup -ErrorAction SilentlyContinue)) {
     New-LocalGroup -Name $LabGroup `
@@ -78,6 +93,7 @@ if (-not (Get-LocalGroup -Name $LabGroup -ErrorAction SilentlyContinue)) {
 } else {
     Write-Host "  Lab group already exists."
 }
+$status.LabGroupOk = $true
 
 Write-Host ""
 Write-Host "=== Ensuring reader account '$ReaderUser' exists ===" -ForegroundColor Cyan
@@ -94,6 +110,7 @@ if (-not (Get-LocalUser -Name $ReaderUser -ErrorAction SilentlyContinue)) {
 } else {
     Write-Host "  Reader account already exists."
 }
+$status.ReaderOk = $true
 
 Write-Host ""
 Write-Host "=== Configuring root ACL on $Root ===" -ForegroundColor Cyan
@@ -132,13 +149,31 @@ $rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAcces
     "$Domain\$ReaderUser", "ReadAndExecute", $inheritBoth, $noProp, "Allow"
 )))
 
+Write-Host "    Applying new root ACL and propagating inheritance to every child." -ForegroundColor Yellow
+Write-Host "    On TB-scale volumes this can take hours. The script will appear to" -ForegroundColor Yellow
+Write-Host "    hang on this step — that is expected; do not interrupt it." -ForegroundColor Yellow
+Write-Host "    Start: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+$rootSw = [System.Diagnostics.Stopwatch]::StartNew()
+
 Set-Acl -Path $Root -AclObject $rootAcl
-Write-Host "Root ACL set." -ForegroundColor Green
+
+$rootSw.Stop()
+$status.RootAclOk = $true
+Write-Host ("Root ACL set. (elapsed: {0:N1} min / {1:N0} s)" -f $rootSw.Elapsed.TotalMinutes, $rootSw.Elapsed.TotalSeconds) -ForegroundColor Green
 
 Write-Host ""
 Write-Host "=== Creating user folders ===" -ForegroundColor Cyan
+Write-Host "    Note: each user-folder ACL change also propagates to that folder's children,"
+Write-Host "    so users with very large folders may take a while on this step too."
 
+$total = $Users.Count
+$idx = 0
 foreach ($user in $Users) {
+    $idx++
+    $status.CurrentUser = $user
+    Write-Host ""
+    Write-Host "  [$idx/$total] $user" -ForegroundColor Cyan
+    $userSw = [System.Diagnostics.Stopwatch]::StartNew()
     # Ensure local account exists
     if (-not (Get-LocalUser -Name $user -ErrorAction SilentlyContinue)) {
         Write-Host "  Local account '$user' does not exist." -ForegroundColor Yellow
@@ -154,6 +189,7 @@ foreach ($user in $Users) {
         } catch {
             Write-Warning "  Failed to create user '$user': $_"
             Write-Warning "  Skipping folder setup for this user."
+            $status.CurrentUser = $null
             continue
         }
     }
@@ -204,7 +240,43 @@ foreach ($user in $Users) {
     } else {
         Write-Host "           $user is already in $LabGroup"
     }
+
+    $userSw.Stop()
+    Write-Host ("           [user done in {0:N1} s]" -f $userSw.Elapsed.TotalSeconds) -ForegroundColor DarkGray
+    $status.CompletedUsers += $user
+    $status.CurrentUser = $null
 }
 
-Write-Host ""
-Write-Host "Done." -ForegroundColor Green
+$completed = $true
+
+}
+finally {
+    $overallSw.Stop()
+    Write-Host ""
+    if ($completed) {
+        Write-Host "=== Done ===" -ForegroundColor Green
+    } else {
+        Write-Host "=== Script exited early — progress summary below ===" -ForegroundColor Red
+    }
+    Write-Host ("  [{0}] Lab group '$LabGroup' ensured"        -f $(if ($status.LabGroupOk) {'X'} else {' '}))
+    Write-Host ("  [{0}] Reader account '$ReaderUser' ensured" -f $(if ($status.ReaderOk)   {'X'} else {' '}))
+    Write-Host ("  [{0}] Root ACL configured on $Root"         -f $(if ($status.RootAclOk)  {'X'} else {' '}))
+    Write-Host ("  Users fully processed: {0} / {1}" -f $status.CompletedUsers.Count, $Users.Count)
+    if ($status.CompletedUsers.Count -gt 0) {
+        Write-Host ("       completed:          {0}" -f ($status.CompletedUsers -join ', ')) -ForegroundColor Green
+    }
+    if ($status.CurrentUser) {
+        Write-Host ("       interrupted during: {0}" -f $status.CurrentUser) -ForegroundColor Yellow
+    }
+    $notStarted = @($Users | Where-Object { ($status.CompletedUsers -notcontains $_) -and ($_ -ne $status.CurrentUser) })
+    if ($notStarted.Count -gt 0) {
+        Write-Host ("       not started:        {0}" -f ($notStarted -join ', '))
+    }
+    Write-Host ""
+    Write-Host ("Total elapsed: {0:N1} min" -f $overallSw.Elapsed.TotalMinutes)
+    if (-not $completed) {
+        Write-Host ""
+        Write-Host "The script is idempotent — re-running with the same arguments will" -ForegroundColor DarkGray
+        Write-Host "pick up where it left off (completed steps become no-ops)." -ForegroundColor DarkGray
+    }
+}
