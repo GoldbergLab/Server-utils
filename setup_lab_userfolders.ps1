@@ -261,7 +261,7 @@ foreach ($user in $Users) {
     # After this, the folder inherits Admins/SYSTEM/LabMembers/reader from root,
     # plus the explicit Modify for the owner.
     if ($DryRun) {
-        Write-Host "           [DRY RUN] Would normalize ACL on $userPath:" -ForegroundColor Magenta
+        Write-Host "           [DRY RUN] Would normalize ACL on ${userPath}:" -ForegroundColor Magenta
         Write-Host "                       - re-enable inheritance from root" -ForegroundColor Magenta
         Write-Host "                       - remove any explicit (non-inherited) ACEs" -ForegroundColor Magenta
         Write-Host "                       - grant Modify to $account" -ForegroundColor Magenta
