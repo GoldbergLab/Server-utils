@@ -7,7 +7,7 @@
       - Administrators: Full control everywhere
       - LabMembers group: can read/traverse anywhere + create new files/folders
         anywhere, but cannot modify or delete ANY existing files/folders
-        (not even ones they themselves created — strict isolation)
+        (not even ones they themselves created -- strict isolation)
       - Reader account: read/traverse only, anywhere (intended for use as a
         base credential for CIFS `multiuser` mounts)
       - Each named user: explicit Modify permission on their own user folder,
@@ -42,7 +42,7 @@
 
 .PARAMETER DryRun
     If set, the script reports what it would do at each step but makes no
-    changes — no accounts, groups, folders, or ACLs are created or modified,
+    changes -- no accounts, groups, folders, or ACLs are created or modified,
     and you are not prompted for any passwords. Useful for previewing the
     effect of a run before committing to it (especially on TB-scale volumes,
     where the real ACL propagation can take hours).
@@ -95,7 +95,7 @@ $completed = $false
 try {
 
 if ($DryRun) {
-    Write-Host "=== DRY RUN MODE — no changes will be made ===" -ForegroundColor Magenta
+    Write-Host "=== DRY RUN MODE -- no changes will be made ===" -ForegroundColor Magenta
     Write-Host "    All actions reported below are previews; nothing is written." -ForegroundColor Magenta
     Write-Host ""
 }
@@ -162,7 +162,7 @@ $rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAcces
 
 # LabMembers: ReadAndExecute + CreateFiles + CreateDirectories, inherits
 # This lets members read anything and create new files/folders,
-# but NOT modify or delete existing ones — not even ones they created.
+# but NOT modify or delete existing ones -- not even ones they created.
 # Only the owning user of a folder (via their explicit Modify grant below)
 # or an administrator can modify/delete the contents of that folder.
 $labRights = [System.Security.AccessControl.FileSystemRights]"ReadAndExecute,CreateFiles,CreateDirectories"
@@ -188,7 +188,7 @@ if ($DryRun) {
 } else {
     Write-Host "    Applying new root ACL and propagating inheritance to every child." -ForegroundColor Yellow
     Write-Host "    On TB-scale volumes this can take hours. The script will appear to" -ForegroundColor Yellow
-    Write-Host "    hang on this step — that is expected; do not interrupt it." -ForegroundColor Yellow
+    Write-Host "    hang on this step -- that is expected; do not interrupt it." -ForegroundColor Yellow
     Write-Host "    Start: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
     $rootSw = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -320,15 +320,15 @@ finally {
     Write-Host ""
     if ($completed) {
         if ($DryRun) {
-            Write-Host "=== Dry run complete — NO changes were made ===" -ForegroundColor Magenta
+            Write-Host "=== Dry run complete -- NO changes were made ===" -ForegroundColor Magenta
         } else {
             Write-Host "=== Done ===" -ForegroundColor Green
         }
     } else {
         if ($DryRun) {
-            Write-Host "=== Dry run exited early — progress summary below (no changes were made) ===" -ForegroundColor Magenta
+            Write-Host "=== Dry run exited early -- progress summary below (no changes were made) ===" -ForegroundColor Magenta
         } else {
-            Write-Host "=== Script exited early — progress summary below ===" -ForegroundColor Red
+            Write-Host "=== Script exited early -- progress summary below ===" -ForegroundColor Red
         }
     }
     Write-Host ("  [{0}] Lab group '$LabGroup' ensured"        -f $(if ($status.LabGroupOk) {'X'} else {' '}))
@@ -349,7 +349,7 @@ finally {
     Write-Host ("Total elapsed: {0:N1} min" -f $overallSw.Elapsed.TotalMinutes)
     if (-not $completed) {
         Write-Host ""
-        Write-Host "The script is idempotent — re-running with the same arguments will" -ForegroundColor DarkGray
+        Write-Host "The script is idempotent -- re-running with the same arguments will" -ForegroundColor DarkGray
         Write-Host "pick up where it left off (completed steps become no-ops)." -ForegroundColor DarkGray
     }
 }

@@ -40,7 +40,7 @@ Write-Host ""
 Write-Host "Path:  $Path" -ForegroundColor Cyan
 Write-Host ("Owner: {0}" -f $acl.Owner)
 if ($acl.Owner -match '^S-1-') {
-    Write-Host "       ^ raw SID — the owning account no longer exists on this server (orphaned)." -ForegroundColor Yellow
+    Write-Host "       ^ raw SID -- the owning account no longer exists on this server (orphaned)." -ForegroundColor Yellow
 }
 Write-Host ""
 
@@ -68,7 +68,7 @@ foreach ($ace in $acl.Access) {
     Write-Host ("       rights: {0}" -f $rights) -ForegroundColor $color
     Write-Host ("       {0}" -f $flags) -ForegroundColor DarkGray
     if ($orphaned) {
-        Write-Host "       ^ orphaned SID — account no longer exists on this server" -ForegroundColor Yellow
+        Write-Host "       ^ orphaned SID -- account no longer exists on this server" -ForegroundColor Yellow
     }
     Write-Host ""
 }
@@ -77,7 +77,7 @@ Write-Host "How to read this:"
 Write-Host "  - 'inherited' ACEs come from a parent folder. Re-running setup_lab_userfolders.ps1"
 Write-Host "    and changing the root ACL WILL update these automatically via propagation."
 Write-Host "  - 'EXPLICIT' ACEs are set directly on this item. The setup script only clears"
-Write-Host "    explicit ACEs on the top-level user folders themselves — explicit ACEs on"
+Write-Host "    explicit ACEs on the top-level user folders themselves -- explicit ACEs on"
 Write-Host "    items DEEP INSIDE a user folder are NOT touched by the script."
 Write-Host "  - Orphaned SIDs (yellow) are ACEs for accounts that no longer exist on this"
 Write-Host "    server. They're functionally harmless (the SID matches nobody), but clutter"
