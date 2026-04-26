@@ -40,12 +40,23 @@
     Account domain. Defaults to the local computer name (for local accounts).
     If you ever use a real domain, pass the domain name here.
 
+.PARAMETER DryRun
+    If set, the script reports what it would do at each step but makes no
+    changes — no accounts, groups, folders, or ACLs are created or modified,
+    and you are not prompted for any passwords. Useful for previewing the
+    effect of a run before committing to it (especially on TB-scale volumes,
+    where the real ACL propagation can take hours).
+
 .EXAMPLE
     .\setup_z5_userfolders.ps1 -Root "D:\z5" -Users "lizcirone","cj397","ap2527"
 
 .EXAMPLE
     # Just add one new user later
     .\setup_z5_userfolders.ps1 -Root "D:\z5" -Users "newuser"
+
+.EXAMPLE
+    # Preview without making any changes
+    .\setup_z5_userfolders.ps1 -Root "D:\z5" -Users "newuser" -DryRun
 #>
 
 param(
@@ -59,7 +70,9 @@ param(
 
     [string]$ReaderUser = "reader",
 
-    [string]$Domain = $env:COMPUTERNAME
+    [string]$Domain = $env:COMPUTERNAME,
+
+    [switch]$DryRun
 )
 
 if (-not (Test-Path $Root)) {
@@ -81,15 +94,25 @@ $completed = $false
 
 try {
 
+if ($DryRun) {
+    Write-Host "=== DRY RUN MODE — no changes will be made ===" -ForegroundColor Magenta
+    Write-Host "    All actions reported below are previews; nothing is written." -ForegroundColor Magenta
+    Write-Host ""
+}
+
 Write-Host "=== Ensuring lab group '$LabGroup' exists ===" -ForegroundColor Cyan
 if (-not (Get-LocalGroup -Name $LabGroup -ErrorAction SilentlyContinue)) {
-    New-LocalGroup -Name $LabGroup `
-                   -Description "Lab members with create-only access to shared drive" `
-                   -ErrorAction Stop | Out-Null
-    Write-Host "  Created local group: $LabGroup" -ForegroundColor Green
-    Write-Warning "  The group is empty. Add members with:"
-    Write-Warning "    Add-LocalGroupMember -Group $LabGroup -Member <username>"
-    Write-Warning "  Until it has members, nobody (besides admins / folder owners / reader) can access the drive."
+    if ($DryRun) {
+        Write-Host "  [DRY RUN] Would create local group: $LabGroup" -ForegroundColor Magenta
+    } else {
+        New-LocalGroup -Name $LabGroup `
+                       -Description "Lab members with create-only access to shared drive" `
+                       -ErrorAction Stop | Out-Null
+        Write-Host "  Created local group: $LabGroup" -ForegroundColor Green
+        Write-Warning "  The group is empty. Add members with:"
+        Write-Warning "    Add-LocalGroupMember -Group $LabGroup -Member <username>"
+        Write-Warning "  Until it has members, nobody (besides admins / folder owners / reader) can access the drive."
+    }
 } else {
     Write-Host "  Lab group already exists."
 }
@@ -98,15 +121,19 @@ $status.LabGroupOk = $true
 Write-Host ""
 Write-Host "=== Ensuring reader account '$ReaderUser' exists ===" -ForegroundColor Cyan
 if (-not (Get-LocalUser -Name $ReaderUser -ErrorAction SilentlyContinue)) {
-    $pw = Read-Host -AsSecureString "Set a password for the new '$ReaderUser' account"
-    New-LocalUser -Name $ReaderUser `
-                  -Password $pw `
-                  -FullName "$ReaderUser (read-only service account)" `
-                  -Description "Read-only credential for CIFS mounts" `
-                  -PasswordNeverExpires `
-                  -UserMayNotChangePassword `
-                  -ErrorAction Stop | Out-Null
-    Write-Host "  Created local user: $ReaderUser" -ForegroundColor Green
+    if ($DryRun) {
+        Write-Host "  [DRY RUN] Would prompt for a password and create local user: $ReaderUser" -ForegroundColor Magenta
+    } else {
+        $pw = Read-Host -AsSecureString "Set a password for the new '$ReaderUser' account"
+        New-LocalUser -Name $ReaderUser `
+                      -Password $pw `
+                      -FullName "$ReaderUser (read-only service account)" `
+                      -Description "Read-only credential for CIFS mounts" `
+                      -PasswordNeverExpires `
+                      -UserMayNotChangePassword `
+                      -ErrorAction Stop | Out-Null
+        Write-Host "  Created local user: $ReaderUser" -ForegroundColor Green
+    }
 } else {
     Write-Host "  Reader account already exists."
 }
@@ -149,17 +176,28 @@ $rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAcces
     "$Domain\$ReaderUser", "ReadAndExecute", $inheritBoth, $noProp, "Allow"
 )))
 
-Write-Host "    Applying new root ACL and propagating inheritance to every child." -ForegroundColor Yellow
-Write-Host "    On TB-scale volumes this can take hours. The script will appear to" -ForegroundColor Yellow
-Write-Host "    hang on this step — that is expected; do not interrupt it." -ForegroundColor Yellow
-Write-Host "    Start: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-$rootSw = [System.Diagnostics.Stopwatch]::StartNew()
+if ($DryRun) {
+    Write-Host "  [DRY RUN] Would apply root ACL to $Root with these explicit ACEs:" -ForegroundColor Magenta
+    Write-Host "             Administrators           : FullControl"
+    Write-Host "             SYSTEM                   : FullControl"
+    Write-Host "             $LabGroup                : ReadAndExecute, CreateFiles, CreateDirectories"
+    Write-Host "             $Domain\$ReaderUser      : ReadAndExecute"
+    Write-Host "             (inheritance: ContainerInherit + ObjectInherit, propagated to all children)"
+    Write-Host "  [DRY RUN] On TB-scale volumes a real run can take hours for inheritance to propagate." -ForegroundColor Magenta
+    $status.RootAclOk = $true
+} else {
+    Write-Host "    Applying new root ACL and propagating inheritance to every child." -ForegroundColor Yellow
+    Write-Host "    On TB-scale volumes this can take hours. The script will appear to" -ForegroundColor Yellow
+    Write-Host "    hang on this step — that is expected; do not interrupt it." -ForegroundColor Yellow
+    Write-Host "    Start: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    $rootSw = [System.Diagnostics.Stopwatch]::StartNew()
 
-Set-Acl -Path $Root -AclObject $rootAcl
+    Set-Acl -Path $Root -AclObject $rootAcl
 
-$rootSw.Stop()
-$status.RootAclOk = $true
-Write-Host ("Root ACL set. (elapsed: {0:N1} min / {1:N0} s)" -f $rootSw.Elapsed.TotalMinutes, $rootSw.Elapsed.TotalSeconds) -ForegroundColor Green
+    $rootSw.Stop()
+    $status.RootAclOk = $true
+    Write-Host ("Root ACL set. (elapsed: {0:N1} min / {1:N0} s)" -f $rootSw.Elapsed.TotalMinutes, $rootSw.Elapsed.TotalSeconds) -ForegroundColor Green
+}
 
 Write-Host ""
 Write-Host "=== Creating user folders ===" -ForegroundColor Cyan
@@ -174,30 +212,44 @@ foreach ($user in $Users) {
     Write-Host ""
     Write-Host "  [$idx/$total] $user" -ForegroundColor Cyan
     $userSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $account = "$Domain\$user"
+
     # Ensure local account exists
-    if (-not (Get-LocalUser -Name $user -ErrorAction SilentlyContinue)) {
+    $userExists = [bool](Get-LocalUser -Name $user -ErrorAction SilentlyContinue)
+    if (-not $userExists) {
         Write-Host "  Local account '$user' does not exist." -ForegroundColor Yellow
-        $pw = Read-Host -AsSecureString "  Set an initial password for new user '$user'"
-        try {
-            New-LocalUser -Name $user `
-                          -Password $pw `
-                          -FullName $user `
-                          -Description "Lab member account" `
-                          -PasswordNeverExpires `
-                          -ErrorAction Stop | Out-Null
-            Write-Host "  Created local user: $user" -ForegroundColor Green
-        } catch {
-            Write-Warning "  Failed to create user '$user': $_"
-            Write-Warning "  Skipping folder setup for this user."
-            $status.CurrentUser = $null
-            continue
+        if ($DryRun) {
+            Write-Host "  [DRY RUN] Would prompt for a password and create local user: $user" -ForegroundColor Magenta
+        } else {
+            $pw = Read-Host -AsSecureString "  Set an initial password for new user '$user'"
+            try {
+                New-LocalUser -Name $user `
+                              -Password $pw `
+                              -FullName $user `
+                              -Description "Lab member account" `
+                              -PasswordNeverExpires `
+                              -ErrorAction Stop | Out-Null
+                Write-Host "  Created local user: $user" -ForegroundColor Green
+                $userExists = $true
+            } catch {
+                Write-Warning "  Failed to create user '$user': $_"
+                Write-Warning "  Skipping folder setup for this user."
+                $status.CurrentUser = $null
+                continue
+            }
         }
     }
 
     $userPath = Join-Path $Root $user
-    if (-not (Test-Path $userPath)) {
-        New-Item -ItemType Directory -Path $userPath | Out-Null
-        Write-Host "  Created: $userPath" -ForegroundColor Green
+    $folderExists = Test-Path $userPath
+    if (-not $folderExists) {
+        if ($DryRun) {
+            Write-Host "  [DRY RUN] Would create folder: $userPath" -ForegroundColor Magenta
+        } else {
+            New-Item -ItemType Directory -Path $userPath | Out-Null
+            Write-Host "  Created: $userPath" -ForegroundColor Green
+            $folderExists = $true
+        }
     } else {
         Write-Host "  Exists:  $userPath"
     }
@@ -208,34 +260,47 @@ foreach ($user in $Users) {
     #   3. Add a single explicit Modify for the owning user
     # After this, the folder inherits Admins/SYSTEM/LabMembers/reader from root,
     # plus the explicit Modify for the owner.
-    $userAcl = Get-Acl $userPath
-    $userAcl.SetAccessRuleProtection($false, $false)  # enable inheritance, don't preserve current
-    # Remove any explicit (non-inherited) access rules
-    $userAcl.Access | Where-Object { -not $_.IsInherited } | ForEach-Object {
-        [void]$userAcl.RemoveAccessRule($_)
-    }
-    $account = "$Domain\$user"
-    try {
-        $userRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $account, "Modify", $inheritBoth, $noProp, "Allow"
-        )
-        $userAcl.AddAccessRule($userRule)
-        Set-Acl -Path $userPath -AclObject $userAcl
-        Write-Host "           Normalized ACL; granted Modify to $account"
-    } catch {
-        Write-Warning "  Could not grant permissions to '$account': $_"
-        Write-Warning "  (Does the account exist on this server?)"
+    if ($DryRun) {
+        Write-Host "           [DRY RUN] Would normalize ACL on $userPath:" -ForegroundColor Magenta
+        Write-Host "                       - re-enable inheritance from root" -ForegroundColor Magenta
+        Write-Host "                       - remove any explicit (non-inherited) ACEs" -ForegroundColor Magenta
+        Write-Host "                       - grant Modify to $account" -ForegroundColor Magenta
+    } elseif (-not $folderExists) {
+        # Shouldn't reach here unless folder creation failed silently; guard anyway
+        Write-Warning "           Folder $userPath does not exist; skipping ACL step."
+    } else {
+        $userAcl = Get-Acl $userPath
+        $userAcl.SetAccessRuleProtection($false, $false)  # enable inheritance, don't preserve current
+        # Remove any explicit (non-inherited) access rules
+        $userAcl.Access | Where-Object { -not $_.IsInherited } | ForEach-Object {
+            [void]$userAcl.RemoveAccessRule($_)
+        }
+        try {
+            $userRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $account, "Modify", $inheritBoth, $noProp, "Allow"
+            )
+            $userAcl.AddAccessRule($userRule)
+            Set-Acl -Path $userPath -AclObject $userAcl
+            Write-Host "           Normalized ACL; granted Modify to $account"
+        } catch {
+            Write-Warning "  Could not grant permissions to '$account': $_"
+            Write-Warning "  (Does the account exist on this server?)"
+        }
     }
 
     # Ensure the user is a member of the lab group
     $alreadyMember = Get-LocalGroupMember -Group $LabGroup -ErrorAction SilentlyContinue |
                      Where-Object { $_.Name -eq $account }
     if (-not $alreadyMember) {
-        try {
-            Add-LocalGroupMember -Group $LabGroup -Member $user -ErrorAction Stop
-            Write-Host "           Added $user to $LabGroup"
-        } catch {
-            Write-Warning "  Could not add '$user' to group '$LabGroup': $_"
+        if ($DryRun) {
+            Write-Host "           [DRY RUN] Would add $user to $LabGroup" -ForegroundColor Magenta
+        } else {
+            try {
+                Add-LocalGroupMember -Group $LabGroup -Member $user -ErrorAction Stop
+                Write-Host "           Added $user to $LabGroup"
+            } catch {
+                Write-Warning "  Could not add '$user' to group '$LabGroup': $_"
+            }
         }
     } else {
         Write-Host "           $user is already in $LabGroup"
@@ -254,9 +319,17 @@ finally {
     $overallSw.Stop()
     Write-Host ""
     if ($completed) {
-        Write-Host "=== Done ===" -ForegroundColor Green
+        if ($DryRun) {
+            Write-Host "=== Dry run complete — NO changes were made ===" -ForegroundColor Magenta
+        } else {
+            Write-Host "=== Done ===" -ForegroundColor Green
+        }
     } else {
-        Write-Host "=== Script exited early — progress summary below ===" -ForegroundColor Red
+        if ($DryRun) {
+            Write-Host "=== Dry run exited early — progress summary below (no changes were made) ===" -ForegroundColor Magenta
+        } else {
+            Write-Host "=== Script exited early — progress summary below ===" -ForegroundColor Red
+        }
     }
     Write-Host ("  [{0}] Lab group '$LabGroup' ensured"        -f $(if ($status.LabGroupOk) {'X'} else {' '}))
     Write-Host ("  [{0}] Reader account '$ReaderUser' ensured" -f $(if ($status.ReaderOk)   {'X'} else {' '}))
