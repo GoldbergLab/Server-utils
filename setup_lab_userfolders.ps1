@@ -47,6 +47,19 @@
     effect of a run before committing to it (especially on TB-scale volumes,
     where the real ACL propagation can take hours).
 
+.PARAMETER SkipRootSetup
+    If set, the root ACL configuration step is skipped entirely -- the root's
+    ACL is not touched, and no whole-volume inheritance propagation occurs.
+    The lab group, reader account, and per-user steps (folder, account, ACL,
+    group membership) all still run normally.
+
+    Use this when adding more users *after* an initial run has already
+    configured the root, to avoid re-triggering the (potentially hours-long)
+    propagation across the whole tree.
+
+    WARNING: only use this if you are sure the root ACL is already correctly
+    configured from a previous successful run. The script does not verify it.
+
 .EXAMPLE
     .\setup_z5_userfolders.ps1 -Root "D:\z5" -Users "lizcirone","cj397","ap2527"
 
@@ -57,6 +70,10 @@
 .EXAMPLE
     # Preview without making any changes
     .\setup_z5_userfolders.ps1 -Root "D:\z5" -Users "newuser" -DryRun
+
+.EXAMPLE
+    # Add more users after the initial root setup; skip the slow root ACL step
+    .\setup_z5_userfolders.ps1 -Root "D:\z5" -Users "newuser2","newuser3" -SkipRootSetup
 #>
 
 param(
@@ -72,7 +89,9 @@ param(
 
     [string]$Domain = $env:COMPUTERNAME,
 
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    [switch]$SkipRootSetup
 )
 
 if (-not (Test-Path $Root)) {
@@ -140,63 +159,74 @@ if (-not (Get-LocalUser -Name $ReaderUser -ErrorAction SilentlyContinue)) {
 $status.ReaderOk = $true
 
 Write-Host ""
-Write-Host "=== Configuring root ACL on $Root ===" -ForegroundColor Cyan
 
-# Build root ACL from scratch (idempotent)
-$rootAcl = Get-Acl $Root
-$rootAcl.SetAccessRuleProtection($true, $false)   # disable inheritance, don't keep inherited
-$rootAcl.Access | ForEach-Object { [void]$rootAcl.RemoveAccessRule($_) }
-
+# These inheritance flags are used by both the root ACL section below and the
+# per-user ACL block in the loop, so define them once up here -- otherwise
+# -SkipRootSetup would leave them undefined for the user loop.
 $inheritBoth = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit,ObjectInherit"
 $noProp      = [System.Security.AccessControl.PropagationFlags]::None
 
-# Administrators: Full control, inherits everywhere
-$rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-    "Administrators", "FullControl", $inheritBoth, $noProp, "Allow"
-)))
-
-# SYSTEM: Full control (needed for backups, indexing, etc.)
-$rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-    "SYSTEM", "FullControl", $inheritBoth, $noProp, "Allow"
-)))
-
-# LabMembers: ReadAndExecute + CreateFiles + CreateDirectories, inherits
-# This lets members read anything and create new files/folders,
-# but NOT modify or delete existing ones -- not even ones they created.
-# Only the owning user of a folder (via their explicit Modify grant below)
-# or an administrator can modify/delete the contents of that folder.
-$labRights = [System.Security.AccessControl.FileSystemRights]"ReadAndExecute,CreateFiles,CreateDirectories"
-$rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-    $LabGroup, $labRights, $inheritBoth, $noProp, "Allow"
-)))
-
-# Reader account: ReadAndExecute only, inherits everywhere.
-# Intended for use as a base credential by CIFS `multiuser` mounts on clients.
-$rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-    "$Domain\$ReaderUser", "ReadAndExecute", $inheritBoth, $noProp, "Allow"
-)))
-
-if ($DryRun) {
-    Write-Host "  [DRY RUN] Would apply root ACL to $Root with these explicit ACEs:" -ForegroundColor Magenta
-    Write-Host "             Administrators           : FullControl"
-    Write-Host "             SYSTEM                   : FullControl"
-    Write-Host "             $LabGroup                : ReadAndExecute, CreateFiles, CreateDirectories"
-    Write-Host "             $Domain\$ReaderUser      : ReadAndExecute"
-    Write-Host "             (inheritance: ContainerInherit + ObjectInherit, propagated to all children)"
-    Write-Host "  [DRY RUN] On TB-scale volumes a real run can take hours for inheritance to propagate." -ForegroundColor Magenta
+if ($SkipRootSetup) {
+    Write-Host "=== Skipping root ACL configuration (-SkipRootSetup specified) ===" -ForegroundColor Cyan
+    Write-Host "    Assumes the root ACL on $Root is already correctly configured"
+    Write-Host "    from a previous successful run. The script does NOT verify this."
     $status.RootAclOk = $true
 } else {
-    Write-Host "    Applying new root ACL and propagating inheritance to every child." -ForegroundColor Yellow
-    Write-Host "    On TB-scale volumes this can take hours. The script will appear to" -ForegroundColor Yellow
-    Write-Host "    hang on this step -- that is expected; do not interrupt it." -ForegroundColor Yellow
-    Write-Host "    Start: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-    $rootSw = [System.Diagnostics.Stopwatch]::StartNew()
+    Write-Host "=== Configuring root ACL on $Root ===" -ForegroundColor Cyan
 
-    Set-Acl -Path $Root -AclObject $rootAcl
+    # Build root ACL from scratch (idempotent)
+    $rootAcl = Get-Acl $Root
+    $rootAcl.SetAccessRuleProtection($true, $false)   # disable inheritance, don't keep inherited
+    $rootAcl.Access | ForEach-Object { [void]$rootAcl.RemoveAccessRule($_) }
 
-    $rootSw.Stop()
-    $status.RootAclOk = $true
-    Write-Host ("Root ACL set. (elapsed: {0:N1} min / {1:N0} s)" -f $rootSw.Elapsed.TotalMinutes, $rootSw.Elapsed.TotalSeconds) -ForegroundColor Green
+    # Administrators: Full control, inherits everywhere
+    $rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+        "Administrators", "FullControl", $inheritBoth, $noProp, "Allow"
+    )))
+
+    # SYSTEM: Full control (needed for backups, indexing, etc.)
+    $rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+        "SYSTEM", "FullControl", $inheritBoth, $noProp, "Allow"
+    )))
+
+    # LabMembers: ReadAndExecute + CreateFiles + CreateDirectories, inherits
+    # This lets members read anything and create new files/folders,
+    # but NOT modify or delete existing ones -- not even ones they created.
+    # Only the owning user of a folder (via their explicit Modify grant below)
+    # or an administrator can modify/delete the contents of that folder.
+    $labRights = [System.Security.AccessControl.FileSystemRights]"ReadAndExecute,CreateFiles,CreateDirectories"
+    $rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $LabGroup, $labRights, $inheritBoth, $noProp, "Allow"
+    )))
+
+    # Reader account: ReadAndExecute only, inherits everywhere.
+    # Intended for use as a base credential by CIFS `multiuser` mounts on clients.
+    $rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+        "$Domain\$ReaderUser", "ReadAndExecute", $inheritBoth, $noProp, "Allow"
+    )))
+
+    if ($DryRun) {
+        Write-Host "  [DRY RUN] Would apply root ACL to $Root with these explicit ACEs:" -ForegroundColor Magenta
+        Write-Host "             Administrators           : FullControl"
+        Write-Host "             SYSTEM                   : FullControl"
+        Write-Host "             $LabGroup                : ReadAndExecute, CreateFiles, CreateDirectories"
+        Write-Host "             $Domain\$ReaderUser      : ReadAndExecute"
+        Write-Host "             (inheritance: ContainerInherit + ObjectInherit, propagated to all children)"
+        Write-Host "  [DRY RUN] On TB-scale volumes a real run can take hours for inheritance to propagate." -ForegroundColor Magenta
+        $status.RootAclOk = $true
+    } else {
+        Write-Host "    Applying new root ACL and propagating inheritance to every child." -ForegroundColor Yellow
+        Write-Host "    On TB-scale volumes this can take hours. The script will appear to" -ForegroundColor Yellow
+        Write-Host "    hang on this step -- that is expected; do not interrupt it." -ForegroundColor Yellow
+        Write-Host "    Start: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        $rootSw = [System.Diagnostics.Stopwatch]::StartNew()
+
+        Set-Acl -Path $Root -AclObject $rootAcl
+
+        $rootSw.Stop()
+        $status.RootAclOk = $true
+        Write-Host ("Root ACL set. (elapsed: {0:N1} min / {1:N0} s)" -f $rootSw.Elapsed.TotalMinutes, $rootSw.Elapsed.TotalSeconds) -ForegroundColor Green
+    }
 }
 
 Write-Host ""
