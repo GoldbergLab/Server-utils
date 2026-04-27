@@ -19,6 +19,12 @@
     The script is idempotent: running it again with the same users is safe.
     Adding new users later: just re-run with the new name(s).
 
+    Run order: the script first ensures the lab group, reader account, and
+    all named user accounts exist -- any password prompts for missing accounts
+    happen up front, in a pre-flight pass. Only after that does it tackle the
+    slow root ACL propagation and per-user folder/ACL/group steps, so the
+    rest of the run can proceed fully unattended.
+
 .PARAMETER Root
     The path to the z5 drive root, e.g. "D:\z5" or "Z:\"
 
@@ -159,6 +165,35 @@ if (-not (Get-LocalUser -Name $ReaderUser -ErrorAction SilentlyContinue)) {
 $status.ReaderOk = $true
 
 Write-Host ""
+Write-Host "=== Pre-flight: ensuring user accounts exist ===" -ForegroundColor Cyan
+Write-Host "    Any password prompts happen here, BEFORE the long-running ACL"
+Write-Host "    propagation, so the rest of the run can be unattended."
+foreach ($user in $Users) {
+    if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) {
+        Write-Host "  '$user' exists."
+    } else {
+        Write-Host "  '$user' does not exist." -ForegroundColor Yellow
+        if ($DryRun) {
+            Write-Host "  [DRY RUN] Would prompt for a password and create local user: $user" -ForegroundColor Magenta
+        } else {
+            $pw = Read-Host -AsSecureString "  Set an initial password for new user '$user'"
+            try {
+                New-LocalUser -Name $user `
+                              -Password $pw `
+                              -FullName $user `
+                              -Description "Lab member account" `
+                              -PasswordNeverExpires `
+                              -ErrorAction Stop | Out-Null
+                Write-Host "  Created local user: $user" -ForegroundColor Green
+            } catch {
+                Write-Warning "  Failed to create user '$user': $_"
+                Write-Warning "  Folder/ACL/group setup will be skipped for this user later."
+            }
+        }
+    }
+}
+
+Write-Host ""
 
 # These inheritance flags are used by both the root ACL section below and the
 # per-user ACL block in the loop, so define them once up here -- otherwise
@@ -244,30 +279,14 @@ foreach ($user in $Users) {
     $userSw = [System.Diagnostics.Stopwatch]::StartNew()
     $account = "$Domain\$user"
 
-    # Ensure local account exists
+    # The pre-flight pass earlier handles account creation. If the account
+    # still doesn't exist here, pre-flight failed for this user (or this is
+    # a dry run); skip the rest of this iteration in the real-run case.
     $userExists = [bool](Get-LocalUser -Name $user -ErrorAction SilentlyContinue)
-    if (-not $userExists) {
-        Write-Host "  Local account '$user' does not exist." -ForegroundColor Yellow
-        if ($DryRun) {
-            Write-Host "  [DRY RUN] Would prompt for a password and create local user: $user" -ForegroundColor Magenta
-        } else {
-            $pw = Read-Host -AsSecureString "  Set an initial password for new user '$user'"
-            try {
-                New-LocalUser -Name $user `
-                              -Password $pw `
-                              -FullName $user `
-                              -Description "Lab member account" `
-                              -PasswordNeverExpires `
-                              -ErrorAction Stop | Out-Null
-                Write-Host "  Created local user: $user" -ForegroundColor Green
-                $userExists = $true
-            } catch {
-                Write-Warning "  Failed to create user '$user': $_"
-                Write-Warning "  Skipping folder setup for this user."
-                $status.CurrentUser = $null
-                continue
-            }
-        }
+    if (-not $userExists -and -not $DryRun) {
+        Write-Warning "  Local account '$user' does not exist (pre-flight may have failed). Skipping."
+        $status.CurrentUser = $null
+        continue
     }
 
     $userPath = Join-Path $Root $user
